@@ -12,8 +12,7 @@ function dpxWrite(filename, data)
     fp = fopen(filename, 'w');
     
     if (fp == -1)
-       disp('File could not be opened. Exiting.');
-       return;
+       error('File could not be opened. Exiting.');
     end
     
     header = data{1};
@@ -25,6 +24,8 @@ function dpxWrite(filename, data)
     yRes = uint32(header(195));
     packing = bitand(bitshift(header(202), -16), 65535);
     descriptor = bitand(bitshift(header(201), -24), 255);
+    
+    
     
     writeHeader(fp, header);
     writeImageData(fp, imageData, offset, depth, xRes, yRes, packing, descriptor);
@@ -44,7 +45,6 @@ function writeImageData(fp, data, offset, depth, xRes, yRes, packing, descriptor
     fseek(fp, offset, 'bof');
     compLen = getCompLen(descriptor);
     numElements = xRes*yRes*compLen;
-    dataItr = 1;
     
     
     if (depth == 10 || depth == 12)
@@ -53,6 +53,7 @@ function writeImageData(fp, data, offset, depth, xRes, yRes, packing, descriptor
         if (packing == 0)
             lnBitLen = xRes*compLen*depth;
             pad = 32 - mod(lnBitLen, 32);
+            dataItr = 1;
             
             for i = 1:yRes
                 
@@ -71,21 +72,30 @@ function writeImageData(fp, data, offset, depth, xRes, yRes, packing, descriptor
         % Packing type 1
         elseif (packing == 1)
    
-            outBuffer = createBufferPacking(data, depth, numElements);
-            fwrite(fp, outBuffer, 'uint32', 0, 'b');
+            buffer = createBufferPacking(data, depth, numElements, xRes, yRes);
+            fwrite(fp, buffer, 'uint32', 0, 'b');
             
         else
-            disp('Cannot handle this type of packing');
+            error('Cannot handle this type of packing');
         end
     else
-        for i = 1:numElements
-            fwrite(fp, data(dataItr), depthType, 0, 'b');
-            dataItr = dataItr + 1;
-        end
+        
+        buffer = zeros(1, numElements);
+        
+        R = reshape(data(:,:,1), 1, xRes*yRes);
+        G = reshape(data(:,:,2), 1, xRes*yRes);
+        B = reshape(data(:,:,3), 1, xRes*yRes);
+        
+        buffer(1:3:end) = R;
+        buffer(2:3:end) = G;
+        buffer(3:3:end) = B;
+        
+        fwrite(fp, buffer, depthType, 0, 'b');
+        
     end
     
     
-function outBuffer = createBufferPacking(data, depth, numElements)
+function outBuffer = createBufferPacking(data, depth, numElements, xRes, yRes)
         
     % numbers left to fill in word
     if (depth == 10)
@@ -96,46 +106,45 @@ function outBuffer = createBufferPacking(data, depth, numElements)
         buffLen = floor(numElements/2);
     end
             
-    if (addToEnd == 0)
-    	outBuffer = zeros(1, buffLen);
-    else
+    if (addToEnd ~= 0)
         buffLen = buffLen + 1;
-        outBuffer = zeros(1, buffLen);
     end
     
-    if (depth == 10)
+    outBuffer = zeros(1, buffLen);
     
-        for i = 1:numElements
-            buffItr = floor((double(i) - 1)/3) + 1;
-            j = mod((i - 1), 3);
-            temp = uint32(data(i));
-
-            if (j == 0)
-                temp = bitshift(temp, 2);
-            elseif (j == 1)
-                temp = bitshift(temp, 12);
-            else
-                temp = bitshift(temp, 22);
-            end
-
-            outBuffer(buffItr) = bitor(outBuffer(buffItr), temp);     
-        end
+    if (depth == 10)
+        
+        c1 = reshape(data(:,:,1), 1, xRes*yRes);
+        c2 = reshape(data(:,:,2), 1, xRes*yRes);
+        c3 = reshape(data(:,:,3), 1, xRes*yRes);
+        
+        R = bitshift(c1, 2);
+        G = bitshift(c2, 12);
+        B = bitshift(c3, 22);
+        
+        outBuffer = bitor(outBuffer, R);
+        outBuffer = bitor(outBuffer, G);
+        outBuffer = bitor(outBuffer, B);       
     
     else
         
-        for i = 1:numElements
-            buffItr = floor((double(i) - 1)/2) + 1;
-            j = mod((i - 1), 2);
-            temp = uint32(data(i));
-
-            if (j == 0)
-                temp = bitshift(temp, 4);
-            else
-                temp = bitshift(temp, 20);
-            end
-
-            outBuffer(buffItr) = bitor(outBuffer(buffItr), temp);     
-        end
+        R = reshape(data(:,:,1), 1, xRes*yRes);
+        G = reshape(data(:,:,2), 1, xRes*yRes);
+        B = reshape(data(:,:,3), 1, xRes*yRes);
+        
+        arr = zeros(1, xRes*yRes*3);
+        arr(1:3:end) = R;
+        arr(2:3:end) = G;
+        arr(3:3:end) = B;
+        
+        c1 = arr(1:2:end);
+        c2 = arr(2:2:end);
+        
+        c1 = bitshift(c1, 4);
+        c2 = bitshift(c2, 20);
+        
+        outBuffer = bitor(outBuffer, c1);
+        outBuffer = bitor(outBuffer, c2);
         
     end
 
@@ -165,12 +174,7 @@ function compLen = getCompLen(desc)
     switch desc
         case 50
             compLen = 3;
-        case 51
-            compLen = 4;
-        case 52
-            compLen = 4;
 
         otherwise
-            disp('Cannot handle descriptor type.');
-            compLen = 1
+            error('Cannot handle descriptor type.');
     end

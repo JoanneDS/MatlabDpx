@@ -7,15 +7,13 @@ function fileData = dpxRead(filename)
     % open file
     fp = fopen(filename);
     if (fp == -1)
-       disp('File could not be opened. Exiting.');
-       return;
+       error('File could not be opened.');
     end  
     
     % Get byte order 0 = forward, 1 = reverse
     order = getOrder(fp);
     if (order == -1)
-        disp('Incorrect syntax. File could not be read. Exiting');
-        return;
+        error('Incorrect syntax. File could not be read.');
     end
     
     % Field 4 Data Offset    
@@ -374,7 +372,6 @@ function data = getImageData(fp, offset, depth, xRes, yRes, packing, descriptor)
     fseek(fp, offset, 'bof');
     compLen = getCompLen(descriptor);
     numElements = xRes*yRes*compLen;
-    data = zeros(1, numElements);
     dataItr = 1;
     
     
@@ -382,14 +379,26 @@ function data = getImageData(fp, offset, depth, xRes, yRes, packing, descriptor)
         
         % datum is sequential 
         if (packing == 0)
+
             lnBitLen = xRes*compLen*depth;
             pad = 32 - mod(lnBitLen, 32);
+            buffer = zeros(1, numElements);
             
-            for i = 1:(yRes - 1)
-                data(dataItr:(dataItr + xRes - 1)) = fread(fp, xRes, depthType);
+            for i = 1:yRes
+                buffer(dataItr:(dataItr + xRes - 1)) = fread(fp, xRes, depthType);
                 fread(fp, pad, 'ubit1');
                 dataItr = dataItr + xRes;
-            end            
+            end  
+            
+            R = buffer(1:3:end);
+            G = buffer(2:3:end);
+            B = buffer(3:3:end);
+            
+            redChan = reshape(R, xRes, yRes);
+            greenChan = reshape(G, xRes, yRes);
+            blueChan = reshape(B, xRes, yRes);
+            
+            data = cat(3, redChan, greenChan, blueChan);
 
         % packing type 1
         elseif (packing == 1)
@@ -397,36 +406,26 @@ function data = getImageData(fp, offset, depth, xRes, yRes, packing, descriptor)
             % Read 10 bit files with packing type 1
             if (depth == 10)
                 
-                buffLen = double(numElements)/3.0;
-                if (mod(numElements, 3) ~= 0)
-                    buffLen = buffLen + 1;
-                end
+                buffer = fread(fp, xRes*yRes, 'uint32', 0, 'b');
                 
-                buffer = fread(fp, buffLen, 'uint32', 0, 'b');
-            
-                for i = 1:numElements
-                    buffPos = floor((double(i) - 1)/3) + 1;
-                    posInWord = mod(i - 1, 3);
-
-                    temp = buffer(buffPos);
-
-                    if (posInWord == 0)
-                        t = bitshift(temp, -2); % BLUE
-                    elseif (posInWord == 1)
-                        t = bitshift(temp, -12); % GREEN
-                    else
-                        t = bitshift(temp, -22); % RED
-                    end
-
-
-                    data(i) = bitand(t, 1023);
-
-                end
+                c1 = bitshift(buffer, -2);
+                c2 = bitshift(buffer, -12);
+                c3 = bitshift(buffer, -22);
+                
+                R = bitand(c1, 1023);
+                G = bitand(c2, 1023);
+                B = bitand(c3, 1023);
+                
+                redChan = reshape(R, xRes, yRes);
+                greenChan = reshape(G, xRes, yRes);
+                blueChan = reshape(B, xRes, yRes);
+                
+                data = cat(3, redChan, greenChan, blueChan);
                 
             % 12 bit files with packing type 1
             else
                 
-                buffLen = double(numElements)/2.0;
+                buffLen = floor(double(numElements)/2.0);
 
                 if (mod(numElements, 2) ~= 0)
                     buffLen = buffLen + 1;
@@ -437,31 +436,45 @@ function data = getImageData(fp, offset, depth, xRes, yRes, packing, descriptor)
                 end
                 
                 buffer = fread(fp, buffLen, 'uint32', 0, 'b');
-           
-                for i = 1:numElements
-                    buffPos = floor((double(i) - 1)/2) + 1;
-                    posInWord = mod(i - 1, 2);
-
-                    temp = buffer(buffPos);
-
-                    if (posInWord == 0)
-                        t = bitshift(temp, -4);
-                    else
-                        t = bitshift(temp, -20);
-                    end
-
-                    data(i) = bitand(t, 4095);
-                    
-                end
+                
+                c1 = bitshift(buffer, -4);
+                c2 = bitshift(buffer, -20);
+                
+                c1 = bitand(c1, 4095);
+                c2 = bitand(c2, 4095);
+                
+                arr = zeros(1, 3*xRes*yRes);
+                arr(1:2:end) = c1;
+                arr(2:2:end) = c2;
+                
+                R = arr(1:3:end);
+                G = arr(2:3:end);
+                B = arr(3:3:end);
+                
+                redChan = reshape(R, xRes, yRes);
+                greenChan = reshape(G, xRes, yRes);
+                blueChan = reshape(B, xRes, yRes);
+                
+                data = cat(3, redChan, greenChan, blueChan);
                 
             end
                 
         else
-            disp('Cannot handle packing format.');
+            error('Cannot handle packing format.');
         end
     else
-            data(1:numElements) = uint64(fread(fp, numElements, depthType, 0, 'b'));
-    end
+            buffer = uint64(fread(fp, numElements, depthType, 0, 'b'));
+            R = buffer(1:3:end);
+            G = buffer(2:3:end);
+            B = buffer(3:3:end);
+            
+            redChan = reshape(R, xRes, yRes);
+            greenChan = reshape(G, xRes, yRes);
+            blueChan = reshape(B, xRes, yRes);
+            
+            data = cat(3, redChan, greenChan, blueChan);
+       
+    end   
     
     fclose(fp);
 
@@ -483,30 +496,25 @@ function depthType = getDepthType(depth)
         case 64
             depthType = 'ubit64';
         otherwise
-            disp('Depth not valid');
-            depthType = 'ubit32'
+            error('Depth not valid');
     end
     
 % gets the length of a component
+% as of now only hold RGB
 function compLen = getCompLen(desc)
     switch desc
         case 50
             compLen = 3;
-        case 51
-            compLen = 4;
-        case 52
-            compLen = 4;
 
         otherwise
-            disp('Cannot handle descriptor type.');
-            compLen = 1
+            error('Cannot handle descriptor type.');
     end    
     
 % seeks to a position from the beginning of the file
 function seek(fp, pos)
     status = fseek(fp, pos, 'bof');
     if (status ~= 0)
-        disp('Error seeking file. Exiting');
+        error('Error seeking file.');
     end
 
 %returns the byte order. 0 = forward, 1 = reverse, -1 = wrong syntax
@@ -570,9 +578,7 @@ function value = getInfo(fp, offset, length, type, order)
         end
      
     else
-        str = sprintf('%s is not a known type.', type);
-        disp(str);
-        value = 0;
+        error('Not a known type');
     end
 
     
